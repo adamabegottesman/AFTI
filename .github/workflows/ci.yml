@@ -1,0 +1,19 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+
+jobs:
+  lint-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Basic checks
+        run: |
+          echo "Checking repo structure..."
+          test -f README.md
+          test -d docs
+          test -d firmware
+          echo "OK"

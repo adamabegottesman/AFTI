@@ -1,0 +1,21 @@
+# Build artefacts
+build/
+*.o
+*.elf
+*.map
+*.bin
+*.hex
+*.lst
+
+# IDE files
+.settings/
+.metadata/
+*.launch
+*.project
+*.cproject
+*.uvoptx
+*.uvprojx
+
+# OS
+.DS_Store
+Thumbs.db
