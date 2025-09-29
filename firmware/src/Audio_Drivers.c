@@ -31,9 +31,9 @@
  * - If you switch to 7-bit, use 0x4A and set R/W in the transaction.
  */
 #define SPI3_DR_ADDR                ((uint32_t)&(SPI3->DR))
-#define BYTES_PER_SAMPLE_16         2U
+#define BYTES_PER_SAMPLE            4U
 #define HALF_BYTES(total_bytes)     ((total_bytes) / 2U)              // bytes per half
-#define HALFWORDS_PER_HALF(bytes)   (HALF_BYTES(bytes) / BYTES_PER_SAMPLE_16)
+#define WORDS_PER_HALF(bytes)   (HALF_BYTES(bytes) / BYTES_PER_SAMPLE)
 #define CS43L22_EXPECTED_ID         0xE0U
 #define externalClockFrequency      8000000U  // HSE = 8 MHz on DISC1
 
@@ -440,9 +440,9 @@ static void dma1_stream7_disable_and_clear(void)
  * - bytes_total: **in BYTES**; must be even and divisible by 2.
  *
  * NOTE: With DBM, NDTR is the number of elements in **one half** (not whole).
- * This function fixes that: NDTR = halfwords_per_half = (bytes_total/2)/2.
+ * This function fixes that: NDTR = words_per_half = (bytes_total/2)/2.
  */
-static void audio_dma_start_dbm(int16_t *buf, uint32_t bytes_total)
+static void audio_dma_start_dbm(int32_t *buf, uint32_t bytes_total)
 {
   DMA_Stream_TypeDef *s = DMA1_Stream7;
 
@@ -461,7 +461,7 @@ static void audio_dma_start_dbm(int16_t *buf, uint32_t bytes_total)
   s->M1AR = (uint32_t)((uint8_t*)buf + half_bytes);
 
   // NDTR: halfwords per HALF (DBM rule)
-  s->NDTR = HALFWORDS_PER_HALF(bytes_total);
+  s->NDTR = WORDS_PER_HALF(bytes_total);
 
   // DBM must already be configured in setupDMAForI2SPeripheral(); ensure CT=0
   s->CR &= ~DMA_SxCR_CT;
@@ -479,7 +479,7 @@ static void audio_dma_start_dbm(int16_t *buf, uint32_t bytes_total)
 
 void setupI2SPeripheral(uint32_t audioSamplingFreq)
 {
-  uint32_t tmpreg = 0U, i2sdiv = 2U, i2sodd = 0U, packetlength = 16U;
+  uint32_t tmpreg = 0U, i2sdiv = 2U, i2sodd = 0U, packetlength = 32U;
   uint32_t tmp = 0U, i2sclk = 0U, vcoinput = 0U, vcooutput = 0U;
 
   RCC->APB1ENR |= RCC_APB1ENR_SPI3EN;
@@ -532,6 +532,16 @@ void setupI2SPeripheral(uint32_t audioSamplingFreq)
   i2sdiv = (uint16_t)((tmp - i2sodd) / 2U);
   i2sodd <<= 8U;
 
+  // After computing i2sdiv and i2sodd:
+  if (i2sdiv < 2U) {
+    i2sdiv = 2U;        // I2SDIV valid range: 2..255
+    i2sodd = 0U;
+  } else if (i2sdiv > 0xFFU) {
+    i2sdiv = 0xFFU;
+    i2sodd = 0U;        // clamp and clear odd
+  }
+
+
   // Divider + enable MCK
   SPI3->I2SPR = (i2sdiv & SPI_I2SPR_I2SDIV) | (i2sodd ? SPI_I2SPR_ODD : 0U) | SPI_I2SPR_MCKOE;
 
@@ -558,8 +568,8 @@ void setupDMAForI2SPeripheral(void)
   s->CR &= ~DMA_SxCR_PFCTRL;                      // DMA flow controller
   s->CR &= ~DMA_SxCR_DIR; s->CR |= DMA_SxCR_DIR_0;
   s->CR |=  DMA_SxCR_MINC;  s->CR &= ~DMA_SxCR_PINC;
-  s->CR &= ~DMA_SxCR_MSIZE; s->CR |= DMA_SxCR_MSIZE_0; // 16-bit
-  s->CR &= ~DMA_SxCR_PSIZE; s->CR |= DMA_SxCR_PSIZE_0; // 16-bit
+  s->CR &= ~DMA_SxCR_MSIZE; s->CR |= DMA_SxCR_MSIZE_1; // 32-bit
+  s->CR &= ~DMA_SxCR_PSIZE; s->CR |= DMA_SxCR_PSIZE_1; // 32-bit
 
   // **DBM + CIRC**
   s->CR |=  DMA_SxCR_CIRC;
@@ -590,7 +600,7 @@ const uint32_t myI2SPLLR[8]  = {    5,     4,     4,     4,     4,     6,     3,
 
 void configureI2SClockPLL(uint32_t AudioFreq)
 {
-  uint8_t idx = 5; // 44.1 k default
+  uint8_t idx = 7; // 96k default
   for (uint8_t i = 0; i < 8; ++i) { if (myI2SFreq[i] == AudioFreq) idx = i; }
 
   RCC->CR &= ~RCC_CR_PLLI2SON;
@@ -633,7 +643,7 @@ MY_AUDIO_StatusTypeDef myAudioInitialisePeripherals(uint16_t OutputDevice, uint8
 /* Seed DBM+CIRC with a contiguous buffer split into two halves.
  * API: PBSIZE is **BYTES** (kept from your original start function).
  */
-void myAudioStartPlaying(int16_t *PlayBuff, uint32_t PBSIZE)
+void myAudioStartPlaying(int32_t *PlayBuff, uint32_t PBSIZE)
 {
   uint8_t audioI2CAddress = DAC_ADDR_ON_I2C;
   cs43l22_Play(audioI2CAddress, (uint16_t *)&PlayBuff[0], PBSIZE);
@@ -645,7 +655,7 @@ void myAudioStartPlaying(int16_t *PlayBuff, uint32_t PBSIZE)
  * API: 'size' is **number of 16-bit samples** in the whole buffer (kept).
  * We convert to bytes internally and re-seed M0/M1 + NDTR accordingly.
  */
-void myAudioChangeBuffer(int16_t *pData, uint32_t size)
+void myAudioChangeBuffer(int32_t *pData, uint32_t size)
 {
   if ((pData == NULL) || (size < 16U)) return;
 
@@ -655,14 +665,14 @@ void myAudioChangeBuffer(int16_t *pData, uint32_t size)
   dma1_stream7_disable_and_clear();
 
   // Convert samples -> bytes (whole buffer), split into halves
-  uint32_t bytes_total = size * BYTES_PER_SAMPLE_16;
+  uint32_t bytes_total = size * BYTES_PER_SAMPLE;
   uint32_t half_bytes  = HALF_BYTES(bytes_total);
 
   s->M0AR = (uint32_t)pData;
   s->M1AR = (uint32_t)((uint8_t*)pData + half_bytes);
 
   // NDTR = halfwords per half
-  s->NDTR = HALFWORDS_PER_HALF(bytes_total);
+  s->NDTR = WORDS_PER_HALF(bytes_total);
 
   // Restart with M0
   s->CR &= ~DMA_SxCR_CT;
