@@ -94,8 +94,8 @@ MY_AUDIO_StatusTypeDef myAudioSpeedUpTheSystemClock(void);
 MY_AUDIO_StatusTypeDef myAudioInitialisePeripherals(uint16_t OutputDevice,
                                                     uint8_t  Volume,
                                                     uint32_t AudioFreq);
-void myAudioStartPlaying(int16_t *PlayBuff, uint32_t PBSIZE_BYTES);
-void myAudioChangeBuffer (int16_t *PlayBuff, uint32_t size_samples);
+void myAudioStartPlaying(int32_t *PlayBuff, uint32_t PBSIZE_BYTES);
+void myAudioChangeBuffer (int32_t *PlayBuff, uint32_t size_samples);
 
 /* =============================================================================
  *                                User callbacks
