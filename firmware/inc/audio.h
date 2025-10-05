@@ -9,14 +9,14 @@ extern "C" {
 #endif
 
 // 1) Init all audio-related peripherals (GPIO/I2C/I2S/DMA/codec), same as your current init
-void audio_init_peripherals(uint16_t *workingBuf, uint32_t workingLen,
-                            uint16_t *sineBuf,    uint32_t sineLen);
+void audio_init_peripherals(int32_t *workingBuf, uint32_t workingLen,
+                            int32_t *sineBuf,    uint32_t sineLen);
 
 // 2) Start playback (same behavior as your start function)
-void audio_start_playback(uint16_t *buf, uint32_t len);
+void audio_start_playback(int32_t *buf, uint32_t len);
 
 // 3) Change the active TX buffer (DMA double-buffer style)
-void audio_change_buffer(uint16_t *buf, uint32_t len);
+void audio_change_buffer(int32_t *buf, uint32_t len);
 
 // 4) DMA callbacks (to be called from IRQ handlers)
 void audio_tx_half_isr(void);
