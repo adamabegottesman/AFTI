@@ -40,6 +40,15 @@ void i2s2_init(uint32_t audio_fs_hz);
  *   - To restart with a new buffer, stop the stream first (disable/clear). */
 void audio2_dma_start(int32_t *buf, uint32_t bytes_total);
 
+/* -------------------------------------------------------------------------- */
+/* Optional dynamic filler selection (CMSIS, ISR-local dispatch)              */
+/* If set, DMA1_Stream4_IRQHandler will call these instead of the default     */
+/* audio2_on_* DDS fillers. Pass NULLs to revert to the default DDS app.      */
+/* Implemented in i2s2_dma.c                                                  */
+/* -------------------------------------------------------------------------- */
+typedef void (*i2s_cb_t)(void);
+void audio2_set_callbacks(i2s_cb_t on_half, i2s_cb_t on_full);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

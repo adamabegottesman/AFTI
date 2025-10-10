@@ -52,6 +52,15 @@ uint32_t wait_flag_with_timeout(volatile uint32_t *addr,
                                 uint32_t value01,
                                 uint32_t timeout_ms);
 
+int wait_flag_with_timeout_us(volatile const uint32_t *reg,
+                              uint32_t bit_index,
+                              uint32_t want_value,
+                              uint32_t timeout_us);
+
+uint32_t timing_now_us(void);
+
+void timing_init_dwt_us(void);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
