@@ -2,11 +2,11 @@
 // Pins (AF5): PB12=WS (LRCK), PB13=CK (BCLK), PB15=SD (DAC DIN), optional PC6=MCLK
 // Format: Philips I2S, Master TX, 24-in-32, stereo interleaved (L,R,...)
 
+#include <dds_tone_i2s2.h>      // audio2_on_* ISR callbacks (default DDS fillers)
 #include "i2s2_dma.h"
 #include "stm32f407xx.h"
-#include "bsp_clock.h"       // i2s_pll_set_fs()
+#include "bsp_clock.h"          // i2s_pll_set_fs()
 #include <stdint.h>
-#include "audio2_app.h"      // audio2_on_* ISR callbacks
 #include <stddef.h>
 
 /* ---------------- Build-time options -------------------------------------- */
@@ -17,6 +17,19 @@
 #ifndef AUDIO2_DMA_IRQ_PRIO
 #define AUDIO2_DMA_IRQ_PRIO 14
 #endif
+
+/* ---------------- Optional dynamic filler selection (tiny hook) ----------- */
+/* If set, ISR will call these instead of the default audio2_on_* DDS fillers. */
+typedef void (*i2s_cb_t)(void);
+static i2s_cb_t s_i2s2_cb_half = 0;
+static i2s_cb_t s_i2s2_cb_full = 0;
+
+/* Exposed so main/app can switch to ADC monitor (or back to DDS with NULLs). */
+void audio2_set_callbacks(i2s_cb_t on_half, i2s_cb_t on_full)
+{
+  s_i2s2_cb_half = on_half;
+  s_i2s2_cb_full = on_full;
+}
 
 /* ---------------- Local helpers ------------------------------------------- */
 
@@ -184,6 +197,15 @@ void DMA1_Stream4_IRQHandler(void)
   if (hisr & DMA_HISR_DMEIF4) DMA1->HIFCR = DMA_HIFCR_CDMEIF4;
   if (hisr & DMA_HISR_FEIF4)  DMA1->HIFCR = DMA_HIFCR_CFEIF4;
 
-  if (hisr & DMA_HISR_HTIF4) { DMA1->HIFCR = DMA_HIFCR_CHTIF4; audio2_on_half_transfer(); }
-  if (hisr & DMA_HISR_TCIF4) { DMA1->HIFCR = DMA_HIFCR_CTCIF4; audio2_on_transfer_complete(); }
+  if (hisr & DMA_HISR_HTIF4) {
+    DMA1->HIFCR = DMA_HIFCR_CHTIF4;
+    if (s_i2s2_cb_half) s_i2s2_cb_half();   // ADC monitor (if installed)
+    else                audio2_on_half_transfer();  // default DDS filler
+  }
+
+  if (hisr & DMA_HISR_TCIF4) {
+    DMA1->HIFCR = DMA_HIFCR_CTCIF4;
+    if (s_i2s2_cb_full) s_i2s2_cb_full();   // ADC monitor (if installed)
+    else                audio2_on_transfer_complete();
+  }
 }
