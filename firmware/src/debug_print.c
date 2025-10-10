@@ -41,7 +41,6 @@ void DebugPrint_Init(uint32_t swo_baud){
 }
 
 
-
 // Non-blocking: give it a short spin then drop the byte if host isn't ready
 void DebugPrint_PutChar(uint8_t ch){
   if ((ITM->TCR & ITM_TCR_ITMENA_Msk) && (ITM->TER & 1U)){

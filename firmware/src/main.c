@@ -1,80 +1,63 @@
-// main.c — explicit bring-up for dual PCM5102 outputs on I2S2 & I2S3
-// - System clock to 168 MHz, 1 kHz SysTick
-// - Two independent tone generators (audio2_app / audio3_app)
-// - Clean, circular DMA playback on both I2S blocks
-
+#include <adcmon_i2s2_app.h>
 #include <stdint.h>
-#include <stdbool.h>
-#include "stm32f4xx.h"                 // CMSIS core
-#include "bsp_clock.h"                 // system_clock_init_168mhz(), timing_init_1khz()
-#include "timing.h"                    // timing_now_ms(), etc.
-#include "audio_project_config.h"      // AUDIO_FS_HZ, etc.
+#include <stdio.h>
 
-#include "audio2_app.h"
-#include "audio_stack_pcm5102.h"       // PCM #1 on I2S2 (SPI2/DMA1-Stream4)
-#include "audio3_app.h"
-#include "audio_stack_pcm5102_b.h"     // PCM #2 on I2S3 (SPI3/DMA1-Stream7)
+#include "stm32f4xx.h"
+#include "bsp_clock.h"
+#include "timing.h"
+#include "audio_project_config.h"
+#include "debug_print.h"
 
-/* Idle policy: WFI in Release to keep ISR jitter low; NOP under debugger. */
-#ifdef DEBUG
-  #define APP_IDLE() do { __NOP(); } while (0)
-#else
-  #define APP_IDLE() do { __WFI(); } while (0)
+#include "ads1256.h"
+#include "dds_tone_i2s3.h"
+#include "dds_tone_i2s2.h"
+#include "pcm5102_i2s3_stack.h"
+#include "pcm5102_i2s2_stack.h"
+
+#ifndef SWO_CLK
+#define SWO_CLK 1894700
 #endif
-
-/* How long each tone plays before switching (ms). */
-#define TONE_DWELL_MS  1000u   /* change to 5000u etc. if you prefer */
-
-//------------------------------------------------------------------------------
-// Dataflow
-//   system_clock(168 MHz) ──► i2s_pll_set_fs(Fs)
-//                                  │
-//                 ┌────────────┬───┴────┬────────────┐
-//                 │            │        │            │
-//          I2S2 + DMA   ─────► LRCK/BCK/SD  ─────►  PCM5102 #1 (analog out)
-//          I2S3 + DMA   ─────► LRCK/BCK/SD  ─────►  PCM5102 #2 (analog out)
-//        (HT/TC IRQs)            (Philips I2S, 24-in-32, stereo)
-//             ▲                                   ▲
-//             │                                   │
-//      audio2_app fills half                audio3_app fills half
-//------------------------------------------------------------------------------
 
 int main(void)
 {
-    // 0) Core timing
-    system_clock_init_168mhz();    // 168 MHz core; seeds PLLI2S for I2S
-    timing_init_1khz();            // 1 kHz SysTick for delays/timeouts
+  /* ===== 0) Clocks, timing, and SWO printf ===== */
+  system_clock_init_168mhz();
+  timing_init_1khz();
+  DebugPrint_Init(SWO_CLK);
+  printf("\r\n=== Boot ===\r\n");
 
-    // 1) PCM #1 on I2S2
-    audio2_app_prefill();
-    audio2_init(AUDIO_FS_HZ);
-    audio2_start(audio2_playbuff(), audio2_playbuff_bytes());
+  /* ===== 1) ADS1256 bring-up (pins + SPI) ===== */
+  ads1256_init_pins_spi();
 
-    // 2) PCM #2 on I2S3
-    audio3_app_prefill();
-    audio3_init(AUDIO_FS_HZ);
-    audio3_start(audio3_playbuff(), audio3_playbuff_bytes());
+  /* ===== 2) ADS1256 config & init ===== */
+  ads1256_cfg_t cfg = {
+    .mux        = 0x06,                 /* AIN0(+) only */
+    .pga        = ADS1256_PGA_8,
+    .drate      = ADS1256_DR_30000SPS,  /* match monitor src rate below */
+    .continuous = true,
+    .on_sample  = NULL
+  };
+  ads1256_init(&cfg);
 
-    // 3) Foreground: cycle 1000 / 2000 / 4000 Hz every TONE_DWELL_MS
-    static const uint32_t kFreqs[] = { 1000u, 2000u, 4000u };
-    uint32_t idx = 0u;
+  /* ===== 3) I2S3: DDS tone (unchanged) ===== */
+  audio3_app_prefill();
+  audio3_init(AUDIO_FS_HZ);
+  audio3_start(audio3_playbuff(), audio3_playbuff_bytes());
+  audio3_set_frequency_hz(2000u);       /* tone on I2S3 only */
 
-    audio2_set_frequency_hz(kFreqs[idx]);
-    audio3_set_frequency_hz(kFreqs[idx]);
+  /* ===== 4) I2S2: ADS1256 monitor =====
+     Prepare monitor, bind to I2S2 TX buffer, and hook DMA callbacks. */
+  adcmon2_app_prefill();
+  adcmon2_set_src_rate_hz(30000u);      /* keep in lockstep with DRATE */
+  adcmon2_bind_output_buffer(audio2_playbuff(), AUDIO_PB_WORDS);
+  audio2_set_callbacks(adcmon2_on_half_transfer, adcmon2_on_transfer_complete);
 
-    uint32_t next_switch_ms = timing_now_ms() + TONE_DWELL_MS;
+  /* Init / start I2S2 using the usual audio2 buffer */
+  audio2_init(AUDIO_FS_HZ);
+  audio2_start(audio2_playbuff(), audio2_playbuff_bytes());
 
-    while (true)
-    {
-        // wrap-safe time check
-        if ((int32_t)(timing_now_ms() - next_switch_ms) >= 0)
-        {
-            idx = (idx + 1u) % (sizeof(kFreqs)/sizeof(kFreqs[0]));
-            audio2_set_frequency_hz(kFreqs[idx]);
-            audio3_set_frequency_hz(kFreqs[idx]);
-            next_switch_ms += TONE_DWELL_MS;
-        }
-
-        APP_IDLE();  // low-jitter idle (WFI in Release, NOP in Debug)
-    }
+  /* ===== 5) Idle ===== */
+  while (1) {
+    /* spin */
+  }
 }
